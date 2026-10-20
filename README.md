@@ -1,10 +1,3 @@
-Read me
-Inbox
-
-Victor Riccardi <victorriccardi24@gmail.com>
-1:40 PM (0 minutes ago)
-to me
-
 # 🐱 DidyouJeeT
 
 ### Ever wonder how bad you jeeted?
