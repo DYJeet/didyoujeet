@@ -1,37 +1,101 @@
-# DidYouJeet.xyz — website MVP
+Read me
+Inbox
 
-A responsive Solana meme-trading entertainment site starring **Jeet the Cat**.
+Victor Riccardi <victorriccardi24@gmail.com>
+1:40 PM (0 minutes ago)
+to me
 
-## Start locally
+# 🐱 DidyouJeeT
 
-Requires Node.js 20+.
+### Ever wonder how bad you jeeted?
 
-```bash
-npm install
-npm run dev
-```
+**DidyouJeeT** is a Solana wallet scanner that analyzes wallet trading history and shows what happened after you sold.
 
-Open http://localhost:3000. To deploy, push this folder to GitHub and import it into Vercel.
+See your buys, sells, P&L, missed upside, and find out which token became your **biggest jeet**. 💀
 
-## What works
+🌐 **Live App:** https://didyoujeet.vercel.app
 
-- Full responsive homepage with original vector cat mascot
-- Solana public-address validation on the server
-- Optional Phantom wallet connection (read-only public address; no transaction signatures)
-- Interactive **Try Demo** with clearly marked illustrative receipts
-- X sharing and social copy
+---
 
-## Important: live scanner status
+## 🔍 What it does
 
-**The live historical jeet scanner is NOT implemented yet.** The `/api/scan` endpoint deliberately returns an informative `503` rather than inventing real transaction data. Demo results are sample data only.
+- Scan a Solana wallet
+- Match token buys and sells
+- Display realized profit/loss
+- Show buy and sell amounts
+- Calculate missed upside after selling
+- Find your biggest missed opportunity
+- Display token names and images
+- Link directly to token charts
+- Analyze multiple trades from one wallet
 
-For a trustworthy production scanner, build an ingestion pipeline that:
-1. Retrieves complete transaction history with pagination from an indexer (e.g. Helius).
-2. Resolves token swaps, token decimals, SOL/USDC routing, fees, and partial fills.
-3. Reconstructs purchase lots and sale lots using a declared accounting rule.
-4. Retrieves historical token prices and post-sale peaks with liquidity checks (e.g. Birdeye/GeckoTerminal where available).
-5. Excludes transfers/airdrops, token migrations, suspicious illiquid spikes, and missing price histories, or labels them as uncertain.
-6. Calculates missed upside on the actual sold quantity and labels peak comparisons as *hypothetical*, not realizable profit.
-7. Adds rate limiting, caching, a privacy policy, and opt-in public leaderboard participation.
+---
 
-Do not release a $JEET token as if it confers ownership, guaranteed benefits, or future returns. Check the domain's availability before buying it; it has **not** been verified here.
+## 🐱 JeeT the Cat
+
+**JeeT the Cat** is the face of DidyouJeeT.
+
+He has one job:
+
+**Scan your wallet and expose your jeets.**
+
+---
+
+## 🪙 $JeeT
+
+A **$JeeT token launch is coming soon** to help support the continued development and growth of the DidyouJeeT ecosystem.
+
+$JeeT is built around **JeeT the Cat**, the mascot and face of DidyouJeeT.
+
+The goal is to grow the project, expand the community, and keep building new tools and features around the DidyouJeeT platform.
+
+**More launch details coming soon.** 👀🐱
+
+---
+
+## 🚧 Built in public
+
+DidyouJeeT is actively being developed and new features are being added regularly.
+
+Upcoming ideas include:
+
+- Better wallet analytics
+- Improved trade history
+- Leaderboards
+- Community features
+- More advanced missed-upside tracking
+- JeeT the Cat integrations
+
+---
+
+## 🛠 Tech
+
+Built with:
+
+- Next.js
+- TypeScript
+- Solana
+- Birdeye data
+- Vercel
+
+---
+
+## ⭐ Support the project
+
+If you like DidyouJeeT:
+
+**Star the repo ⭐**
+
+Want to follow development?
+
+**Watch the repo 👀**
+
+---
+
+## ⚠️ Disclaimer
+
+DidyouJeeT is an analytics and entertainment tool.
+
+Nothing displayed by the site should be considered financial advice.
+
+$JeeT is intended to support the project and community. No promises of profit, returns, ownership, or guaranteed benefits are made.
