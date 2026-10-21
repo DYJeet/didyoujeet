@@ -148,7 +148,12 @@ setExtraProgress((current) => ({
   GitHub ⭐
 </a></div>{error && <div className="error">{error}</div>}</div><div className="mascot-wrap"><div className="burst burst1">✳</div><div className="burst burst2">✦</div><div className="speech">YOU SOLD<br />THERE?! <span>💀</span></div><div className="cat"><JeetCat size={290} /></div><div className="tag">MEET JEET THE CAT 🐈</div></div></div></section>
     <section className="ticker"><div>💸 SOLD TOO EARLY <span>✳</span> 🐈 WE HAVE THE RECEIPTS <span>✳</span> 📉 BUY HIGH SELL LOW <span>✳</span> 💎 DIAMOND HANDS NOT FOUND <span>✳</span> 💸 SOLD TOO EARLY <span>✳</span> 🐈 WE HAVE THE RECEIPTS</div></section>
-    {result && <section className="results" id="results"><div className="section-label">YOUR JEET REPORT <span className="line" /></div>{extraProgress.running && (<div className="tiny green">Analyzing remaining trades... {extraProgress.done}/{extraProgress.total}</div>)}<div className="result-head"><div><h2>{result.mode === 'demo' ? 'DEMO JEET RECEIPT' : 'WALLET RECEIPT'} <span>💀</span></h2><div><small>STATUS</small><strong className="status">{safeTrades.length ? (total < 0 ? 'PAPER HANDS' : 'DIAMOND HANDS') : 'UNDETERMINED'}</strong><span>Jeet the cat is judging you</span></div><p>{result.mode === 'demo' ? 'Illustrative sample data — not a real wallet scan.' : `${result.address.slice(0, 6)}...${result.address.slice(-6)} • ${result.scanned} transactions reviewed`}</p></div><button className="share" onClick={share}><Share2 size={16} /> SHARE ON X</button></div><div className="result-summary"><div><small>AVERAGE RETURN</small><strong>{total.toFixed(1)}%</strong><span>Average return across matched Buy/Sell pairs</span></div>
+    {result && <section className="results" id="results"><div className="section-label">YOUR JEET REPORT <span className="line" /></div>{extraProgress.running && (<div className="tiny green">Analyzing remaining trades... {extraProgress.done}/{extraProgress.total}</div>)}<div className="result-head"><div><h2>{result.mode === 'demo' ? 'DEMO JEET RECEIPT' : 'WALLET RECEIPT'} <span>💀</span></h2><div className="receipt-status-inline">
+  <strong>STATUS</strong>
+  <span className="status">
+    {safeTrades.length ? (total < 0 ? 'PAPER HANDS' : 'DIAMOND HANDS') : 'UNDETERMINED'}
+  </span>
+</div><p>{result.mode === 'demo' ? 'Illustrative sample data — not a real wallet scan.' : `${result.address.slice(0, 6)}...${result.address.slice(-6)} • ${result.scanned} transactions reviewed`}</p></div><button className="share" onClick={share}><Share2 size={16} /> SHARE ON X</button></div><div className="result-summary"><div><small>AVERAGE RETURN</small><strong>{total.toFixed(1)}%</strong><span>Average return across matched Buy/Sell pairs</span></div>
       <div>
         <small>WIN RATE</small>
         <b className="green">{winRate.toFixed(1)}%</b>
@@ -267,8 +272,12 @@ setExtraProgress((current) => ({
                     : `${t.postSellMultiple.toFixed(2)}x AFTER SELL`}
 
             </span></div><div className="trade-bottom"><div>
-              <small>BOUGHT FOR</small>
-              <b>{(t.buySolSpent ?? 0).toFixed(4)} SOL</b>
+              <small>{t.returnPercent == null ? 'ACQUIRED VIA TRANSFER' : 'BOUGHT FOR'}</small>
+<b>
+  {t.returnPercent == null
+    ? 'N/A'
+    : `${(t.buySolSpent ?? 0).toFixed(4)} SOL`}
+</b>
 
               <div className="tiny">
                 {t.buyUsd != null ? `≈ $${t.buyUsd.toFixed(2)}` : ''}
