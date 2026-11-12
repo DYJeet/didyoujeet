@@ -14,7 +14,7 @@ const sample: Trade = {
 };
 export const demo = {
   mode: 'demo' as const, address: '', scanned: 32, complete: true, warnings: [],
-  positions: [], trades: [sample],
+  positions: [], trades: [sample], peakCoverage: null,
 };
 type ReceiptResult = ScanResult | typeof demo;
 const formatUsd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
@@ -67,7 +67,7 @@ async function saveCard(lines: string[], demoMode: boolean) {
   setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-export function Receipt({ result }: { result: ReceiptResult }) {
+export function Receipt({ result, onResume }: { result: ReceiptResult; onResume?: () => void }) {
   const [limit, setLimit] = useState(12);
   const [shareError, setShareError] = useState('');
   const sampleMode = result.mode === 'demo';
@@ -106,13 +106,19 @@ export function Receipt({ result }: { result: ReceiptResult }) {
     </div>
     {shareError && <p role="alert" className="error">{shareError}</p>}
     {result.warnings.map(warning => <p key={warning} className="warning">{warning}</p>)}
+    {onResume && <button className="secondary-btn scan-resume" onClick={onResume}>Scan older transactions</button>}
     <div className="result-summary">
-      <div><small>REALIZED P&amp;L</small><strong>{sol(realized)}</strong><span>{usd(realizedUsd)} historical estimate · {matched.length}/{result.trades.length} exits with known SOL basis</span></div>
+      <div><small>REALIZED P&amp;L · MATCHED EXITS</small><strong>{sol(realized)}</strong><span>{usd(realizedUsd)} historical estimate · {matched.length}/{result.trades.length} exits with known SOL basis</span></div>
       <div><small>WIN RATE</small><b>{matched.length ? (100 * wins.length / matched.length).toFixed(1) + '%' : 'Unavailable'}</b><span>{wins.length} wins · {losses.length} losses · {matched.length - wins.length - losses.length} break-even</span></div>
       <div><small>BIGGEST OBSERVED JEET</small><b>{biggest ? '🏆 ' + token(biggest) : 'Unavailable'}</b><span>{biggest ? usd(biggest.missedUpsideUsd) + ' hypothetical upside' : 'No qualifying price above the sale value'}</span></div>
       <div><small>BEST TRADE</small><b>{best ? token(best) : 'Unavailable'}</b><span>{sol(best?.solProfit)}</span></div>
       <div><small>WORST TRADE</small><b>{worst ? token(worst) : 'Unavailable'}</b><span>{sol(worst?.solProfit)}</span></div>
-      <div><small>OBSERVED MISSED UPSIDE</small><b>{usd(missed)}</b><span>{peaks.length}/{result.trades.length} exits with qualifying price coverage</span></div>
+      <div><small>OBSERVED MISSED UPSIDE</small><b>{usd(missed)}</b><span>{peaks.length}/{result.trades.length} exits with qualifying price coverage</span>
+        {result.peakCoverage && <span>{result.peakCoverage.checked} price windows checked · {result.peakCoverage.withCandles} with candles
+          {result.peakCoverage.tooRecent > 0 ? ` · ${result.peakCoverage.tooRecent} sales too recent` : ''}
+          {result.peakCoverage.failed > 0 ? ` · ${result.peakCoverage.failed} unavailable` : ''}
+          {result.peakCoverage.eligible < result.trades.length ? ' · Some exits lack historical USD proceeds' : ''}</span>}
+      </div>
     </div>
     {!result.trades.length && <p>No supported token exits found in the retrieved history.</p>}
     <div className="cards">{result.trades.slice(0, limit).map(trade =>

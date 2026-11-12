@@ -1,5 +1,6 @@
 export const SOL = 'So11111111111111111111111111111111111111112';
 const USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const raydiumCpmm = 'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C';
 const swapPrograms = new Set([
   '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P',
   'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA',
@@ -16,6 +17,7 @@ type TokenBalance = {
 
 export type Transaction = {
   signature?: string;
+  decoded?: Activity | null | false;
   slot: number;
   transactionIndex?: number;
   blockTime?: number | null;
@@ -37,6 +39,7 @@ export type Transaction = {
   } | null;
 };
 
+export type Holding = { key: string; mint: string; raw: bigint; decimals: number };
 type Leg = { mint: string; raw: bigint; decimals: number };
 type Lot = { raw: bigint; costSol: number | null; costUsd: number | null; time: number | null };
 export type Trade = {
@@ -77,7 +80,9 @@ function recognizedSwap(logs: string[]) {
     }
     const end = /^Program (\w+) (?:success|failed:.*)$/.exec(line);
     if (end && stack.at(-1) === end[1]) stack.pop();
-    if (swapPrograms.has(stack.at(-1) ?? '') && swapInstruction.test(line)) {
+    const program = stack.at(-1) ?? '';
+    if ((swapPrograms.has(program) && swapInstruction.test(line))
+      || (program === raydiumCpmm && /^Program log: Instruction: SwapBase(Input|Output)$/.test(line))) {
       if (stack.length < shallowest) {
         shallowest = stack.length;
         count = 0;
@@ -98,7 +103,7 @@ function decode(tx: Transaction, wallet: string) {
   const walletIndex = keys.findIndex(key => key.pubkey === wallet);
   const indices = new Set<number>(walletIndex >= 0 ? [walletIndex] : []);
   const legs = new Map<string, Leg>();
-  const accounts: { key: string; before: bigint; after: bigint }[] = [];
+  const accounts: { key: string; mint: string; decimals: number; before: bigint; after: bigint }[] = [];
   const before = new Map(meta.preTokenBalances.map(row => [row.accountIndex, row]));
   const after = new Map(meta.postTokenBalances.map(row => [row.accountIndex, row]));
   for (const index of new Set([...before.keys(), ...after.keys()])) {
@@ -112,7 +117,7 @@ function decode(tx: Transaction, wallet: string) {
     indices.add(index);
     const mint = post?.mint ?? pre!.mint;
     if (mint !== SOL && keys[index]?.pubkey) accounts.push({
-      key: keys[index].pubkey + ':' + mint,
+      key: keys[index].pubkey + ':' + mint, mint, decimals: (post ?? pre)!.uiTokenAmount.decimals,
       before: pre?.owner === wallet ? BigInt(pre.uiTokenAmount.amount) : 0n,
       after: post?.owner === wallet ? BigInt(post.uiTokenAmount.amount) : 0n,
     });
@@ -164,37 +169,91 @@ function decode(tx: Transaction, wallet: string) {
 
 export type Activity = ReturnType<typeof decode> & { signature: string; time: number | null };
 
+export function compactTransaction(tx: Transaction, wallet: string): Transaction {
+  const signature = signatureOf(tx);
+  const decoded = decodeActivity(tx, wallet) ?? (tx.meta?.err ? false : null);
+  return { signature, slot: tx.slot, transactionIndex: tx.transactionIndex, decoded };
+}
+
+function decodeActivity(tx: Transaction, wallet: string): Activity | null | undefined {
+  if (tx.decoded === false) return undefined;
+  if (tx.decoded !== undefined) return tx.decoded;
+  if (tx.meta?.err) return undefined;
+  try {
+    const signature = signatureOf(tx);
+    if (!signature) return null;
+    return { ...decode(tx, wallet), signature, time: tx.blockTime ?? null };
+  } catch {
+    return null;
+  }
+}
+
 export function readActivity(transactions: Transaction[], wallet: string) {
   const activity: Activity[] = [];
   let skipped = 0;
   let balanceGaps = 0;
-  const balances = new Map<string, bigint>();
-  // The provider returns ledger order, including transactions that share a slot or timestamp.
-  for (const tx of transactions.slice().reverse()) {
-    if (tx.meta?.err) continue;
-    try {
-      const signature = signatureOf(tx);
-      if (!signature) throw new Error('Missing signature');
-      const decoded = decode(tx, wallet);
-      if (decoded.accounts.some(row => (balances.get(row.key) ?? 0n) !== row.before)) balanceGaps++;
-      for (const row of decoded.accounts) balances.set(row.key, row.after);
-      if (decoded.tokens.length) activity.push({ ...decoded, signature, time: tx.blockTime ?? null });
-    } catch {
-      skipped++;
+  const discontinuous = new Set<string>();
+  const seen = new Map<string, Holding & { opening: bigint }>();
+  const bySlot = new Map<number, Transaction[]>();
+  for (const tx of transactions) {
+    const group = bySlot.get(tx.slot);
+    if (group) group.push(tx);
+    else bySlot.set(tx.slot, [tx]);
+  }
+  for (const slot of [...bySlot.keys()].sort((a, b) => a - b)) {
+    const group = bySlot.get(slot)!;
+    const indices = new Set(group.map(tx => tx.transactionIndex));
+    if (indices.size === group.length && group.every(tx => Number.isSafeInteger(tx.transactionIndex))) {
+      group.sort((a, b) => a.transactionIndex! - b.transactionIndex!);
+    } else group.reverse();
+    for (const tx of group) {
+      const entry = decodeActivity(tx, wallet);
+      if (entry === undefined) continue;
+      if (entry === null) {
+        skipped++;
+        continue;
+      }
+      if (entry.accounts.some(row => (seen.get(row.key)?.raw ?? 0n) !== row.before)) balanceGaps++;
+      for (const row of entry.accounts) {
+        const prior = seen.get(row.key);
+        if (prior && prior.raw !== row.before) discontinuous.add(row.mint);
+        seen.set(row.key, { key: row.key, mint: row.mint, decimals: row.decimals, raw: row.after, opening: prior?.opening ?? row.before });
+      }
+      if (entry.tokens.length) activity.push(entry);
     }
   }
-  return { activity, skipped, balanceGaps };
+  return { activity, skipped, balanceGaps, discontinuous, seen };
 }
 
-function consume(lots: Lot[], quantity: bigint) {
+export function reconcileOpening(
+  ledger: ReturnType<typeof readActivity>, exhausted: boolean, closing?: Holding[],
+) {
+  const opening = new Map<string, { raw: bigint; decimals: number }>();
+  if (ledger.skipped || (!exhausted && !closing)) return opening;
+  const snapshot = new Map(closing?.map(row => [row.key, row]));
+  const unproven = new Set(ledger.discontinuous);
+  const add = (row: Holding, raw: bigint) => {
+    const prior = opening.get(row.mint);
+    opening.set(row.mint, { decimals: row.decimals, raw: (prior?.raw ?? 0n) + raw });
+  };
+  for (const row of ledger.seen.values()) {
+    if (closing && (snapshot.get(row.key)?.raw ?? 0n) !== row.raw) unproven.add(row.mint);
+    add(row, row.opening);
+    snapshot.delete(row.key);
+  }
+  for (const row of snapshot.values()) add(row, row.raw);
+  for (const mint of unproven) opening.delete(mint);
+  return opening;
+}
+
+function consume(queue: { lots: Lot[]; head: number }, quantity: bigint) {
   let sol = 0;
   let usd = 0;
   let solKnown = true;
   let usdKnown = true;
-  const time = lots.find(lot => lot.raw)?.time ?? null;
-  for (const lot of lots) {
-    if (!quantity) break;
-    if (!lot.raw) continue;
+  const time = queue.lots[queue.head]?.time ?? null;
+  while (quantity && queue.head < queue.lots.length) {
+    const lot = queue.lots[queue.head];
     const used = quantity < lot.raw ? quantity : lot.raw;
     const fraction = Number(used) / Number(lot.raw);
     if (lot.costSol == null) solKnown = false;
@@ -211,14 +270,22 @@ function consume(lots: Lot[], quantity: bigint) {
     }
     quantity -= used;
     lot.raw -= used;
+    if (!lot.raw) queue.head++;
   }
   return { sol: solKnown && !quantity ? sol : null, usd: usdKnown && !quantity ? usd : null, time };
 }
 
-export function account(activity: Activity[], complete: boolean, price: (mint: string, time: number | null) => number | null) {
-  const inventory = new Map<string, Lot[]>();
+export function account(activity: Activity[], complete: boolean, price: (mint: string, time: number | null) => number | null,
+  opening = new Map<string, { raw: bigint; decimals: number }>()) {
+  const inventory = new Map<string, { lots: Lot[]; head: number }>();
   const decimals = new Map<string, number>();
   const trades: Trade[] = [];
+  for (const [mint, balance] of opening) {
+    decimals.set(mint, balance.decimals);
+    if (balance.raw > 0n) inventory.set(mint, {
+      lots: [{ raw: balance.raw, costSol: null, costUsd: null, time: null }], head: 0,
+    });
+  }
   const investments = new Map<string, { sol: number; usd: number; solKnown: boolean; usdKnown: boolean }>();
   let unclassifiedExchanges = 0;
   for (const entry of activity) {
@@ -235,13 +302,14 @@ export function account(activity: Activity[], complete: boolean, price: (mint: s
     const equivalentSol = grossSol !== 0 ? Math.abs(grossSol) : grossUsd != null && solUsd != null ? grossUsd / solUsd : null;
     const feeUsd = fee === 0 ? 0 : solUsd == null ? null : fee * solUsd;
     for (const leg of tokens) {
-      const lots = inventory.get(leg.mint) ?? [];
-      inventory.set(leg.mint, lots);
+      const queue = inventory.get(leg.mint) ?? { lots: [], head: 0 };
+      inventory.set(leg.mint, queue);
+      const known = complete || opening.has(leg.mint);
       decimals.set(leg.mint, leg.decimals);
       if (leg.raw > 0n) {
         const costSol = swap && equivalentSol != null ? equivalentSol + fee : null;
         const costUsd = swap && grossUsd != null && feeUsd != null ? grossUsd + feeUsd : null;
-        lots.push({ raw: leg.raw, costSol, costUsd, time });
+        queue.lots.push({ raw: leg.raw, costSol, costUsd, time });
         if (swap) {
           const invested = investments.get(leg.mint) ?? { sol: 0, usd: 0, solKnown: true, usdKnown: true };
           invested.sol += costSol ?? 0;
@@ -252,10 +320,10 @@ export function account(activity: Activity[], complete: boolean, price: (mint: s
         }
         continue;
       }
-      const basis = consume(lots, -leg.raw);
+      const basis = consume(queue, -leg.raw);
       if (!swap || leg.mint === USDC) continue;
-      const buySolSpent = complete ? basis.sol : null;
-      const buyUsd = complete ? basis.usd : null;
+      const buySolSpent = known ? basis.sol : null;
+      const buyUsd = known ? basis.usd : null;
       // A token-to-token swap is one event. Charge its network fee to the incoming lot only.
       const exitFee = outputs.length ? 0 : fee;
       const sellSolReceived = equivalentSol == null ? null : equivalentSol - exitFee;
@@ -266,18 +334,20 @@ export function account(activity: Activity[], complete: boolean, price: (mint: s
         quantity: units(-leg.raw, leg.decimals), buySolSpent, sellSolReceived, solProfit,
         buyUsd, sellUsd, profitUsd: sellUsd != null && buyUsd != null ? sellUsd - buyUsd : null,
         returnPercent: solProfit != null && buySolSpent != null && buySolSpent > 0 ? solProfit / buySolSpent * 100 : null,
-        feeSol: fee, holdSeconds: complete && basis.time != null && time != null ? Math.max(0, time - basis.time) : null,
+        feeSol: fee, holdSeconds: known && basis.time != null && time != null ? Math.max(0, time - basis.time) : null,
       });
     }
   }
-  const positions = [...inventory].flatMap(([mint, lots]) => {
+  const positions = [...inventory].flatMap(([mint, queue]) => {
+    const lots = queue.lots.slice(queue.head);
+    const known = complete || opening.has(mint);
     if (mint === USDC) return [];
     const raw = lots.reduce((sum, lot) => sum + lot.raw, 0n);
     const invested = investments.get(mint);
     if (!raw && !invested) return [];
-    const costKnown = complete && lots.every(lot => !lot.raw || lot.costUsd != null);
+    const costKnown = known && lots.every(lot => !lot.raw || lot.costUsd != null);
     return [{
-      mint, quantity: complete ? units(raw, decimals.get(mint)!) : null,
+      mint, quantity: known ? units(raw, decimals.get(mint)!) : null,
       investedSol: invested?.solKnown ? invested.sol : null,
       investedUsd: invested?.usdKnown ? invested.usd : null,
       remainingCostUsd: costKnown ? lots.reduce((sum, lot) => sum + (lot.raw ? lot.costUsd ?? 0 : 0), 0) : null,

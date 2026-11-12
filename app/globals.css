@@ -82,3 +82,7 @@ button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px soli
   .cat { animation: none; }
 }
 .trade-title img { border-radius: 50%; object-fit: cover; align-self: center; }
+
+.scan-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin-top: 12px; }
+.scan-controls .muted { margin: 0; }
+.scan-controls button, .scan-resume { min-height: 44px; cursor: pointer; }

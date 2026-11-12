@@ -11,16 +11,18 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState('');
   const [error, setError] = useState('');
-  const inFlight = useRef(false);
+  const inFlight = useRef<AbortController | null>(null);
+  const [resumeAddress, setResumeAddress] = useState<string | null>(null);
 
   useEffect(() => {
     if (result) document.getElementById('results')?.focus({ preventScroll: false });
   }, [result]);
 
-  async function scan(wallet?: string) {
+  async function scan(wallet?: string, resume = false) {
     if (inFlight.current) return;
     setError('');
     if (wallet === 'demo') {
+      setResumeAddress(null);
       setResult(demo);
       return;
     }
@@ -29,14 +31,17 @@ export default function Home() {
       setError('Paste a Solana wallet address first.');
       return;
     }
-    inFlight.current = true;
-    setResult(null);
+    const controller = new AbortController();
+    inFlight.current = controller;
+    setResumeAddress(null);
+    if (!resume) setResult(null);
     setLoading(true);
     setProgress('Retrieving finalized wallet history…');
+    if (resume) document.querySelector('.scanbox')?.scrollIntoView({ block: 'center' });
     try {
       const response = await fetch('/api/scan', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
-        body: JSON.stringify({ address: input }), signal: AbortSignal.timeout(65_000),
+        body: JSON.stringify({ address: input, resume }), signal: AbortSignal.any([controller.signal, AbortSignal.timeout(65_000)]),
       });
       if (!response.ok) {
         const body = await response.json().catch(() => null);
@@ -57,10 +62,13 @@ export default function Home() {
             if (event.error) throw new Error(event.error);
             if (event.result) {
               setResult(event.result);
+              if (event.result.canResume) setResumeAddress(input);
               return;
             }
             if (event.progress?.stage === 'history') setProgress(event.progress.count + ' transactions retrieved…');
-            if (event.progress?.stage === 'pricing') setProgress('Checking cost basis and historical prices…');
+            if (event.progress?.stage === 'accounting') setProgress('Reconstructing purchases and matching sales…');
+            if (event.progress?.stage === 'pricing') setProgress('Checking historical prices and calculating P&L…');
+            if (event.progress?.stage === 'peaks') setProgress('Checking post-sale prices for missed upside…');
           }
         }
         throw new Error('Wallet scan was interrupted. Try again.');
@@ -68,9 +76,14 @@ export default function Home() {
         await reader.cancel().catch(() => {});
       }
     } catch (failure) {
-      setError(failure instanceof Error && failure.name !== 'TimeoutError' ? failure.message : 'The scan timed out. Try again.');
+      if (controller.signal.aborted) {
+        setResumeAddress(input);
+        setError('Scan cancelled. You can try to continue from saved history.');
+      } else {
+        setError(failure instanceof Error && failure.name !== 'TimeoutError' ? failure.message : 'The scan timed out. Try again.');
+      }
     } finally {
-      inFlight.current = false;
+      inFlight.current = null;
       setLoading(false);
     }
   }
@@ -99,9 +112,12 @@ export default function Home() {
   className="secondary-btn"
 >
   GitHub ⭐
-</a></div>{loading && <p role="status" className="muted">{progress}</p>}{error && <div className="error" role="alert">{error}</div>}</div><div className="mascot-wrap"><div className="burst burst1">✳</div><div className="burst burst2">✦</div><div className="speech">YOU SOLD<br />THERE?! <span>💀</span></div><div className="cat"><JeetCat size={290} /></div><div className="tag">MEET JEET THE CAT 🐈</div></div></div></section>
+</a></div>{loading && <div className="scan-controls">
+  <p role="status" className="muted">{progress}</p>
+  <button className="secondary-btn" onClick={() => inFlight.current?.abort()}>Cancel scan</button>
+</div>}{!loading && resumeAddress && !result && <button className="secondary-btn" onClick={() => scan(resumeAddress, true)}>Scan older transactions</button>}{error && <div className="error" role="alert">{error}</div>}</div><div className="mascot-wrap"><div className="burst burst1">✳</div><div className="burst burst2">✦</div><div className="speech">YOU SOLD<br />THERE?! <span>💀</span></div><div className="cat"><JeetCat size={290} /></div><div className="tag">MEET JEET THE CAT 🐈</div></div></div></section>
     <section className="ticker"><div>💸 SOLD TOO EARLY <span>✳</span> 🐈 WE HAVE THE RECEIPTS <span>✳</span> 📉 BUY HIGH SELL LOW <span>✳</span> 💎 DIAMOND HANDS NOT FOUND <span>✳</span> 💸 SOLD TOO EARLY <span>✳</span> 🐈 WE HAVE THE RECEIPTS</div></section>
-    {result && <Receipt result={result} />}
+    {result && <Receipt result={result} onResume={!loading && resumeAddress ? () => scan(resumeAddress, true) : undefined} />}
     <section className="how"><div className="section-label">HOW IT WORKS <span className="line" /></div><h2>THREE STEPS TO <span>EMOTIONAL DAMAGE.</span></h2><div className="steps"><div><div className="stepicon">01 <Wallet /></div><h3>DROP THE ADDRESS</h3><p>Paste a public Solana address. No seed phrases, signatures, or sketchy approvals.</p></div><div><div className="stepicon">02 <Zap /></div><h3>FIND YOUR EXITS</h3><p>Review historical sells and compare them with subsequent price moves where reliable data exists.</p></div><div><div className="stepicon">03 <Share2 /></div><h3>SHARE THE PAIN</h3><p>Get your receipt, laugh through the pain, and post your biggest jeet to X.</p></div></div></section>
     <section className="bottom-cta"><div className="emoji">😹</div><h2>THE CHART WENT UP.<br /><span>YOU WENT HOME.</span></h2><p>Every wallet has a story. Some are just embarrassing.</p><button onClick={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); document.querySelector('input')?.focus() }}>CHECK YOUR WALLET <ArrowRight size={18} /></button></section><footer><div className="brand">😼 DID<span>YOU</span>JEET<span className="dot">.XYZ</span></div><span>MADE FOR THE SOLANA DEGENS. NOT FINANCIAL ADVICE.</span><span>© {new Date().getFullYear()} DIDYOUJEET</span></footer></main>
 }

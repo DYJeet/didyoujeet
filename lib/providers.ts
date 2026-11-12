@@ -13,8 +13,9 @@ const queues = {
   birdeye: { next: 0, interval: 1100 },
 };
 
-async function providerFetch(provider: keyof typeof queues, url: string, init: RequestInit, deadline: number) {
+async function providerFetch(provider: keyof typeof queues, url: string, init: RequestInit, deadline: number, signal?: AbortSignal) {
   for (let attempt = 0; ; attempt++) {
+    signal?.throwIfAborted();
     const queue = queues[provider];
     const now = Date.now();
     const start = Math.max(now, queue.next);
@@ -24,15 +25,20 @@ async function providerFetch(provider: keyof typeof queues, url: string, init: R
     try {
       const response = await fetch(url, {
         ...init, cache: 'no-store',
-        signal: AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - Date.now()))),
+        signal: AbortSignal.any([AbortSignal.timeout(Math.max(1, Math.min(5000, deadline - Date.now()))), ...(signal ? [signal] : [])]),
       });
       if (!response.ok) {
         const header = response.headers.get('Retry-After');
         const retryAfter = header ? (/^\d+$/.test(header) ? Number(header) * 1000 : Date.parse(header) - Date.now()) : 0;
         throw new ProviderError(provider, response.status, Number.isFinite(retryAfter) ? retryAfter : 0);
       }
-      return await response.json();
+      const body = await response.json();
+      if (provider === 'helius' && [-32005, -32429].includes(body?.error?.code)) {
+        throw new ProviderError(provider, body.error.code === -32429 ? 429 : 503);
+      }
+      return body;
     } catch (error) {
+      signal?.throwIfAborted();
       const failure = error instanceof ProviderError ? error : new ProviderError(provider, 503);
       const transient = [408, 425, 429, 500, 502, 503, 504].includes(failure.status);
       const delay = Math.max(failure.retryAfter, 350 * 2 ** attempt + Math.random() * 200);
@@ -46,11 +52,11 @@ async function providerFetch(provider: keyof typeof queues, url: string, init: R
   }
 }
 
-export async function rpc<T>(url: string, method: string, params: unknown, deadline: number): Promise<T> {
+export async function rpc<T>(url: string, method: string, params: unknown, deadline: number, signal?: AbortSignal): Promise<T> {
   const result = await providerFetch('helius', url, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  }, deadline);
+  }, deadline, signal);
   if (result?.error || result?.result == null) {
     console.warn(JSON.stringify({ event: 'rpc_failure', method, code: Number(result?.error?.code) || null }));
     throw new ProviderError('helius', 502);
@@ -59,35 +65,52 @@ export async function rpc<T>(url: string, method: string, params: unknown, deadl
 }
 
 type Page = { data: Transaction[]; paginationToken?: string | null };
+export function newHistory() {
+  return {
+    transactions: new Map<string, Transaction>(), seenCursors: new Set<string>(),
+    cursor: undefined as string | undefined, missing: 0, pages: 0,
+    exhausted: false, stalled: false,
+  };
+}
+
 export async function walkHistory(fetchPage: (cursor?: string) => Promise<Page>, maxPages = 25,
-  progress: (count: number) => void = () => {}) {
-  const transactions = new Map<string, Transaction>();
-  const seenCursors = new Set<string>();
-  let cursor: string | undefined;
-  let missing = 0;
-  for (let page = 0; page < maxPages; page++) {
+  progress: (count: number) => void = () => {}, state = newHistory(), maxTotalPages = Infinity) {
+  let reason: string | null = null;
+  for (let page = 0; page < maxPages && state.pages < maxTotalPages && !state.exhausted && !state.stalled; page++) {
     try {
-      const response = await fetchPage(cursor);
+      const response = await fetchPage(state.cursor);
       if (!Array.isArray(response.data) || (response.paginationToken != null && typeof response.paginationToken !== 'string')) {
         throw new Error('Invalid history response');
       }
+      state.pages++;
       for (const tx of response.data) {
         const signature = tx && signatureOf(tx);
-        if (!signature) missing++;
-        else if (!transactions.has(signature)) transactions.set(signature, tx);
+        if (!signature) state.missing++;
+        else if (!state.transactions.has(signature)) state.transactions.set(signature, tx);
       }
-      progress(transactions.size);
+      progress(state.transactions.size);
       const next = response.paginationToken;
-      if (!next) return { transactions: [...transactions.values()], complete: missing === 0, reason: missing ? 'missing records' : null };
-      if (seenCursors.has(next)) return { transactions: [...transactions.values()], complete: false, reason: 'repeated provider cursor' };
-      seenCursors.add(next);
-      cursor = next;
+      if (!next) state.exhausted = true;
+      else if (state.seenCursors.has(next)) state.stalled = true;
+      else {
+        state.seenCursors.add(next);
+        state.cursor = next;
+      }
     } catch (error) {
-      if (page === 0) throw error;
-      return { transactions: [...transactions.values()], complete: false, reason: 'history provider interrupted the scan' };
+      if (!state.pages) throw error;
+      reason = 'history provider interrupted the scan';
+      break;
     }
   }
-  return { transactions: [...transactions.values()], complete: false, reason: 'scan page limit reached' };
+  const complete = state.exhausted && !state.missing;
+  if (!reason && !complete) {
+    reason = state.exhausted ? 'missing records' : state.stalled ? 'repeated provider cursor'
+      : state.pages >= maxTotalPages ? 'maximum history budget reached' : 'scan page limit reached';
+  }
+  return {
+    transactions: [...state.transactions.values()], complete, reason,
+    canResume: !!state.cursor && !state.exhausted && !state.stalled && state.pages < maxTotalPages,
+  };
 }
 
 const candleCache = new Map<string, { expires: number; candles: Candle[] }>();
@@ -121,10 +144,13 @@ export async function candles(mint: string, from: number, to: number, deadline: 
   return request;
 }
 
-export async function mapTwo<T>(items: T[], fn: (item: T) => Promise<void>) {
+export async function mapTwo<T>(items: T[], fn: (item: T) => Promise<void>, signal?: AbortSignal) {
   let index = 0;
   async function worker() {
-    while (index < items.length) await fn(items[index++]);
+    while (index < items.length) {
+      signal?.throwIfAborted();
+      await fn(items[index++]);
+    }
   }
   await Promise.all([worker(), worker()]);
 }
